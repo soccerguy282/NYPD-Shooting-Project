@@ -1,0 +1,210 @@
+---
+title: "NYCShooting"
+author: "d"
+date: "2023-06-25"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First library the packages used in my notebook, then download and read in the .CSV file containing the NYPD Shooting Data. This will be stored in shooting_data.
+
+```{r NYPD_CVS_Data_Import}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+url1 = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+shooting_data = read_csv(url1)
+```
+
+Now I want to get the data into tidy format, remove unnecessary variables, and get the correct factors for variables. The shooting_data has one shooting incident on each line but I would like each line to be a date with the number of shootings on every date. I will make a new variable to store this called date_counts_total_completed. I am going to add columns with the day of the week, the month, and a cumulative total of the number of shootings to analyze later. One other thing I am going to need is to add in dates when no shootings occurred since those don't show up in shooting_data.
+
+```{r tidy_shooting_data}
+shooting_data = shooting_data %>%
+  #Removing longitude/latitude variables
+  select(-c(X_COORD_CD , Y_COORD_CD , Latitude , Longitude, Lon_Lat)) %>%
+  #Changing date to date type variable
+  mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"))
+#Creating a count of how many incidents occur on each day
+date_counts_total = shooting_data %>%
+    group_by(OCCUR_DATE) %>%
+    summarise(count = n())
+#Filling in dates that had no shootings
+min_date = min(shooting_data$OCCUR_DATE)
+max_date = max(shooting_data$OCCUR_DATE)
+complete_dates = seq(from = min_date, to = max_date, by = "day")
+date_counts_total_completed = date_counts_total %>%
+  complete(OCCUR_DATE = complete_dates)
+date_counts_total_completed$count = replace(date_counts_total_completed$count, is.na(date_counts_total_completed$count), 0)
+#Add a column with the cumulative shootings
+date_counts_total_completed <- date_counts_total_completed %>%
+  mutate(running_total = cumsum(count))
+#Adding day of the week in a new column
+date_counts_total_completed$day_of_week = weekdays(date_counts_total_completed$OCCUR_DATE)
+#Adding a month column
+date_counts_total_completed$month = month(date_counts_total_completed$OCCUR_DATE)
+summary(shooting_data)
+summary(date_counts_total_completed)
+```
+
+Plotting number of shootings on y-axis and date on x-axis.
+
+```{r plotting_shootings}
+ggplot(data = date_counts_total_completed, aes(x = OCCUR_DATE, y = count)) +
+  geom_line() +
+  labs(x = "OCCUR_DATE", y = "Count", title = "Occurrences by Date") +
+  theme_minimal()
+```
+
+There is definitely a seasonality to this data so I want to investigate which months have more shootings than others. This also makes me wonder if there could be a shorter seasonality occurring over the days of the week. Before we look into this let's check out the cumulative shootings.
+
+```{r plotting_cumulative_shootings}
+ggplot(data = date_counts_total_completed, aes(x = OCCUR_DATE, y = running_total)) +
+  geom_line() +
+  labs(x = "OCCUR_DATE", y = "running total", title = "Cumulative Occurrences by Date") +
+  theme_minimal()
+```
+
+This plot doesn't tell me a whole lot, except that shootings have been happening at a fairly consistent rate, slowing down a little 2015-2020 and then increasing right after 2020. Perhaps this is related to the COVID pandemic. 
+
+To look at the seasonality, let's take a look at the average number of shootings per day in the different months to find out when the seasonality occurs.
+
+```{r per_month}
+
+# Create a list to store the average and std counts for each day
+month_average_counts <- list()
+month_std_counts <- list()
+# Loop through each day of the week
+for (i in seq(1,12)) {
+  # Filter data for the current day of the week
+  month_data <- date_counts_total_completed %>%
+    filter(month(OCCUR_DATE) == i)
+  
+  # Calculate the average and SD count for the current day of the week
+  month_average_count <- mean(month_data$count)
+  month_std_count <- sd(month_data$count)
+  # Store the average count in the list
+  month_average_counts[[i]] <- month_average_count
+  month_std_counts[[i]] <- month_std_count
+}
+#Plot averages
+#Creating tibble from the list of averages
+average_month_counts <- tibble(
+  Month = names(month_average_counts),
+  AverageCount = unlist(month_average_counts)
+)
+#Plotting averages
+ggplot(average_month_counts, aes(x = seq(1,12), y = AverageCount)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Month", y = "Average Count", title = "Average Counts by Month") +
+  scale_x_continuous(breaks = seq(1, 12), labels = month.abb) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+It looks like the summer months June, July, and August have the highest average number of shootings and winter months January, February, and March have the lowest. This makes me wonder if a seasonality exists over the week as well.
+Let's take a look at the average and standard deviation of number of shootings on the days of the week over all the years in our data.
+
+```{r day_of_week}
+# Get unique days of the week
+unique_days <- unique(date_counts_total_completed$day_of_week)
+
+# Create a list to store the average and std counts for each day
+average_counts <- list()
+std_counts <- list()
+weekday_counts <- list()
+# Loop through each day of the week
+for (day in unique_days) {
+  # Filter data for the current day of the week
+  day_data <- date_counts_total_completed %>%
+    filter(weekdays(OCCUR_DATE) == day)
+  
+  # Calculate the average and SD count for the current day of the week
+  average_count <- mean(day_data$count)
+  std_count <- sd(day_data$count)
+  # Store the average count in the list
+  average_counts[[day]] <- average_count
+  std_counts[[day]] <- std_count
+  weekday_counts[[day]] <- day_data$count
+  assign(paste("day_data_", day, sep = ""), day_data)
+  
+}
+#Creating tibble from the list of averages
+average_weekday_counts <- tibble(
+  DayOfWeek = names(average_counts),
+  AverageCount = unlist(average_counts)
+)
+#Set ordering
+reordering <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+date_counts_total_completed$day_of_week <- factor(date_counts_total_completed$day_of_week, levels = reordering)
+#Plotting averages
+ggplot(average_weekday_counts, aes(x = DayOfWeek, y = AverageCount)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Day of Week", y = "Average Count", title = "Average Counts by Day of Week") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Box and whisker and violin plots can help us to see the distribution of the data better than just averages and standard deviations. The width of the violin represents how much of the data is located there. 
+
+```{r month_boxwhiskerviolinplots}
+#For months
+ggplot(date_counts_total_completed, aes(x = factor(month), y = count)) +
+  geom_violin(trim=FALSE, fill='#A4A4A4', color="darkred")+
+  geom_boxplot(width=0.1) + theme_minimal()
+```
+
+```{r day_boxwhiskerviolinplots}
+#For days of week
+
+ggplot(date_counts_total_completed, aes(x = day_of_week, y = count)) +
+  geom_violin(trim=FALSE, fill='#A4A4A4', color="darkred")+
+  geom_boxplot(width=0.1) + theme_minimal()
+```
+
+To test if day of the week correlates with the number of shootings, we can try a linear model of day of the week and number of shootings.
+
+```{r test_model_day_of_week}
+#Create model and view summary
+mod <- lm(count ~ day_of_week, data = date_counts_total_completed)
+summary(mod)
+#Add prediction from model as a column in date_counts_total_completed and average_counts
+date_counts_total_completed = date_counts_total_completed %>% mutate(pred = predict(mod))
+#average_weekday_counts = average_weekday_counts %>% mutate(pred = predict(mod))
+ggplot(date_counts_total_completed, aes(x = day_of_week, y = count)) +
+  geom_violin(trim=FALSE, fill='#A4A4A4', color="darkred")+
+  geom_boxplot(width=0.1) + theme_minimal() +
+  geom_point(aes(x = day_of_week, y = pred), color = 'blue')
+
+```
+We can see that the model works pretty well. The blue dots represent the predictions from the model and we can see that they line up nicely with median number of shootings occurring on days of the week in the box and whisker plots.
+
+It would make sense that most shootings occur on Friday, Saturday, and Sunday. Instead we see Saturday, Sunday, and Monday with the highest shootings. To investigate this further let's look at the time of day.
+
+```{r time_of_day}
+#First add a column to shooting_data with the the hour of day
+shooting_data <- shooting_data %>%
+  mutate(OCCUR_HOUR = hour(as.POSIXct(OCCUR_TIME, format = "%H:%M:%S")))
+# Group by hour and calculate counts
+hourly_counts <- shooting_data %>%
+  group_by(OCCUR_HOUR) %>%
+  summarise(count = n())
+
+# Create a bar plot for hourly counts
+ggplot(hourly_counts, aes(x = factor(OCCUR_HOUR), y = count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Hour of Day", y = "Count", title = "Shooting Counts by Hour") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+In order to avoid bias, I tried to investigate what I saw in the original data instead of my own ideas about when shootings would occur. One potential bias is the cutoff time for shootings occurring on certain days. Because I made the cutoff 12:00am (00:00), shootings occuring on evenings past midnight are showing up as shootings occurring the next day when it might be better to think of them as occurring very late on those days.
+Conclusion: There is a seasonality occurring over the year where summer months have higher number of shootings and winter months have lower. There is also seasonality over the week where more shootings occur on weekends and fewer on weekdays. Monday likely sees shootings that occur in the early morning hours (1am,2am,3am) which could be considered as very late Sunday nights.
+
